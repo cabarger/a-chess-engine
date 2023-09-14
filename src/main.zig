@@ -1,11 +1,10 @@
 //! Toy chess engine
-//! Caleb Barger -- 09/10/23
 
 const std = @import("std");
 const ascii = std.ascii;
 
-const board_width = 2;
-const board_height = 2;
+const move_depth = 1;
+const board_dim = 2;
 
 const PieceType = enum(u8) {
     pawn,
@@ -38,20 +37,20 @@ const PieceHandle = struct {
 };
 
 fn memToBoardCoords(row_index: u8, col_index: u8) @Vector(2, u8) {
-    if (col_index > 7 or row_index > 8) {
+    if (col_index > board_dim or row_index > board_dim) {
         std.debug.print("Bad pos ({d},{d})\n", .{ row_index, col_index });
         unreachable;
     }
-    return @Vector(2, u8){ 'a' + col_index, 8 - row_index };
+    return @Vector(2, u8){ 'a' + col_index, board_dim - row_index };
 }
 
 fn boardToMemCoords(col_chr: u8, row: u8) @Vector(2, u8) {
     const col_index: i8 = @intCast(ascii.toLower(col_chr) - 'a');
-    if (col_index < 0 or col_index > board_width - 1 or row < 1 or row > board_height) {
+    if (col_index < 0 or col_index > board_dim - 1 or row < 1 or row > board_dim) {
         std.debug.print("Bad pos ({c},{d})\n", .{ col_chr, row });
         unreachable;
     }
-    return @Vector(2, u8){ board_height - row, @intCast(col_index) };
+    return @Vector(2, u8){ board_dim - row, @intCast(col_index) };
 }
 
 fn initPieceSets(piece_sets: []PieceSet) !void {
@@ -99,7 +98,7 @@ fn initBoard(board: []PieceHandle, piece_sets: []PieceSet) void {
 
     for (0..2) |set_color_index| {
         for (piece_sets[set_color_index].pieces, 0..) |piece, piece_index| {
-            board[piece.pos[0] * board_width + piece.pos[1]] = PieceHandle{
+            board[piece.pos[0] * board_dim + piece.pos[1]] = PieceHandle{
                 .set_color = @enumFromInt(set_color_index),
                 .piece_index = @intCast(piece_index),
             };
@@ -107,9 +106,9 @@ fn initBoard(board: []PieceHandle, piece_sets: []PieceSet) void {
     }
 }
 
-fn pieceHandleFromCoords(board: []PieceHandle, coords: @Vector(2, u8)) *PieceHandle {
-    if (coords[0] < board_height and coords[1] < board_width)
-        return @ptrCast(board.ptr + coords[0] * board_width + coords[1]);
+fn handleFromCoords(board: []PieceHandle, coords: @Vector(2, u8)) *PieceHandle {
+    if (@reduce(.And, coords < @as(@Vector(2, u8), @splat(board_dim))))
+        return @ptrCast(board.ptr + coords[0] * board_dim + coords[1]);
     unreachable;
 }
 
@@ -120,119 +119,130 @@ fn pieceFromHandle(piece_handle: PieceHandle, piece_sets: []PieceSet) ?*Piece {
     return result;
 }
 
-fn validMoves(stdout: anytype, board: []PieceHandle, piece_sets: []PieceSet, mem_coords: @Vector(2, u8)) !void {
-    const piece_handle = pieceHandleFromCoords(board, mem_coords).*;
+fn validMoves(
+    ally: std.mem.Allocator,
+    board: []PieceHandle,
+    piece_sets: []PieceSet,
+    mem_coords: @Vector(2, u8),
+    move_list: *std.ArrayList(MoveNode),
+) !void {
+    const piece_handle = handleFromCoords(board, mem_coords).*;
     const piece = pieceFromHandle(piece_handle, piece_sets) orelse unreachable;
-    const board_coords = memToBoardCoords(piece.pos[0], piece.pos[1]);
 
     switch (piece.type) {
         .pawn => { // TODO(caleb): En passant
-            switch (piece_handle.set_color) { // TODO(caleb): Don't switch on color, do this with some math...
-                .white => {
-                    if (board[(piece.pos[0] - 1) * 8 + piece.pos[1]].piece_index == null) { // There isn't a piece at row + 1 {
-                        try stdout.print("{c},{d}\n", .{ board_coords[0], board_coords[1] + 1 });
-                    }
-                    if (board_coords[1] == 2) { // Pawn is on the second rank
-                        if (board[(piece.pos[0] - 2) * 8 + piece.pos[1]].piece_index == null) // There isn't a piece at row + 2
-                            try stdout.print("{c},{d}\n", .{ board_coords[0], board_coords[1] + 2 });
-                    }
-                },
-                .black => {
-                    if (board[(piece.pos[0] + 1) * 8 + piece.pos[1]].piece_index == null) { // There isn't a piece at row + 1 {
-                        try stdout.print("{c},{d}\n", .{ board_coords[0], board_coords[1] - 1 });
-                    }
-
-                    if (board_coords[1] == 7) { // Pawn is on the seventh rank
-                        if (board[(piece.pos[0] + 2) * 8 + piece.pos[1]].piece_index == null) // There isn't a piece at row + 2
-                            try stdout.print("{c},{d}\n", .{ board_coords[0], board_coords[1] - 2 });
-                    }
-                },
-                else => unreachable,
-            }
-        },
-        .night => {
             for ([_]@Vector(2, i8){
-                @Vector(2, i8){ -2, 1 }, @Vector(2, i8){ -2, -1 }, // Up
-                @Vector(2, i8){ 1, 2 }, @Vector(2, i8){ -1, 2 }, // Right
-                @Vector(2, i8){ 2, 1 }, @Vector(2, i8){ 2, -1 }, // Down
-                @Vector(2, i8){ 1, -2 }, @Vector(2, i8){ -1, -2 }, // Left
-            }) |d_pos| {
-                const row_index: i8 = @intCast(piece.pos[0]);
-                const col_index: i8 = @intCast(piece.pos[1]);
-                if (row_index + d_pos[0] < 8 and row_index + d_pos[0] >= 0 and
-                    col_index + d_pos[1] < 8 and col_index + d_pos[1] >= 0 and
-                    board[@intCast((row_index + d_pos[0]) * 8 + col_index + d_pos[1])].set_color != piece_handle.set_color)
+                @Vector(2, i8){ -1, 1 }, @Vector(2, i8){ -1, -1 }, // Pawn x pawn
+            }) |d_pos_white| {
+                // NOTE(caleb): White pawns move "upward" (-1) in memory. If black invert direction.
+                var d_pos = d_pos_white;
+                if (piece_handle.set_color == .black) d_pos[0] *= -1;
+                const pos: @Vector(2, i8) = @bitCast(piece.pos);
+
+                if (@reduce(.And, (pos + d_pos) < @as(@Vector(2, i8), @splat(board_dim))) and
+                    @reduce(.And, (pos + d_pos) >= @as(@Vector(2, i8), @splat(0))) and
+                    handleFromCoords(board, @bitCast(pos + d_pos)).set_color != piece_handle.set_color and
+                    handleFromCoords(board, @bitCast(pos + d_pos)).set_color != .none)
                 {
-                    const new_board_coords = memToBoardCoords(@intCast(row_index + d_pos[0]), @intCast(col_index + d_pos[1]));
-                    try stdout.print("{c},{d}\n", .{ new_board_coords[0], new_board_coords[1] });
+                    try move_list.append(MoveNode{
+                        .from_pos = @bitCast(pos),
+                        .to_pos = @bitCast(pos + d_pos),
+                        .edges = std.ArrayList(MoveNode).init(ally),
+                    });
                 }
             }
-        },
-        .bishop => {
-            for ([_]@Vector(2, i8){
-                @Vector(2, i8){ -1, -1 }, // Top left
-                @Vector(2, i8){ -1, 1 }, // Top right
-                @Vector(2, i8){ 1, -1 }, // Bottom left
-                @Vector(2, i8){ 1, 1 }, // Bottom right
-            }) |d_pos| {
-                var row_index: i8 = @intCast(piece.pos[0]);
-                var col_index: i8 = @intCast(piece.pos[1]);
-                while ((row_index + d_pos[0] < 8 and row_index + d_pos[0] >= 0) and
-                    (col_index + d_pos[1] < 8 and col_index + d_pos[1] >= 0) and
-                    (board[@intCast((row_index + d_pos[0]) * 8 + col_index + d_pos[1])].set_color != piece_handle.set_color))
-                {
-                    const new_board_coords = memToBoardCoords(@intCast(row_index + d_pos[0]), @intCast(col_index + d_pos[1]));
-                    try stdout.print("{c},{d}\n", .{ new_board_coords[0], new_board_coords[1] });
 
-                    if (board[@intCast((row_index + d_pos[0]) * 8 + col_index + d_pos[1])].set_color != .none)
-                        break;
-
-                    row_index += d_pos[0];
-                    col_index += d_pos[1];
-                }
-            }
+            // for ([_]@Vector(2, i8){
+            //     @Vector(2, i8){ -1, 0 }, //@Vector(2, i8){ -2, 0 }, // Forward!! TODO(caleb): Handle +2 off start rank
+            // }) |d_pos_white| {
+            //     var d_pos = d_pos_white;
+            //     if (piece_handle.set_color == .black) d_pos[0] *= -1;
+            //     const row_index: i8 = @intCast(piece.pos[0]);
+            //     const col_index: i8 = @intCast(piece.pos[1]);
+            //     if (row_index + d_pos[0] < board_dim and row_index + d_pos[0] >= 0 and
+            //         col_index + d_pos[1] < board_dim and col_index + d_pos[1] >= 0 and
+            //         board[@intCast((row_index + d_pos[0]) * board_dim + col_index + d_pos[1])].set_color == .none)
+            //     {
+            //         const new_board_coords = memToBoardCoords(@intCast(row_index + d_pos[0]), @intCast(col_index + d_pos[1]));
+            //         try stdout.print("{c},{d}\n", .{ new_board_coords[0], new_board_coords[1] });
+            //     }
+            // }
         },
+        // .night => {
+        //     for ([_]@Vector(2, i8){
+        //         @Vector(2, i8){ -2, 1 }, @Vector(2, i8){ -2, -1 }, // Up
+        //         @Vector(2, i8){ 1, 2 }, @Vector(2, i8){ -1, 2 }, // Right
+        //         @Vector(2, i8){ 2, 1 }, @Vector(2, i8){ 2, -1 }, // Down
+        //         @Vector(2, i8){ 1, -2 }, @Vector(2, i8){ -1, -2 }, // Left
+        //     }) |d_pos| {
+        //         const row_index: i8 = @intCast(piece.pos[0]);
+        //         const col_index: i8 = @intCast(piece.pos[1]);
+        //         if (row_index + d_pos[0] < 8 and row_index + d_pos[0] >= 0 and
+        //             col_index + d_pos[1] < 8 and col_index + d_pos[1] >= 0 and
+        //             board[@intCast((row_index + d_pos[0]) * 8 + col_index + d_pos[1])].set_color != piece_handle.set_color)
+        //         {
+        //             const new_board_coords = memToBoardCoords(@intCast(row_index + d_pos[0]), @intCast(col_index + d_pos[1]));
+        //             try stdout.print("{c},{d}\n", .{ new_board_coords[0], new_board_coords[1] });
+        //         }
+        //     }
+        // },
+        // .bishop => {
+        //     for ([_]@Vector(2, i8){
+        //         @Vector(2, i8){ -1, -1 }, // Top left
+        //         @Vector(2, i8){ -1, 1 }, // Top right
+        //         @Vector(2, i8){ 1, -1 }, // Bottom left
+        //         @Vector(2, i8){ 1, 1 }, // Bottom right
+        //     }) |d_pos| {
+        //         var row_index: i8 = @intCast(piece.pos[0]);
+        //         var col_index: i8 = @intCast(piece.pos[1]);
+        //         while ((row_index + d_pos[0] < 8 and row_index + d_pos[0] >= 0) and
+        //             (col_index + d_pos[1] < 8 and col_index + d_pos[1] >= 0) and
+        //             (board[@intCast((row_index + d_pos[0]) * 8 + col_index + d_pos[1])].set_color != piece_handle.set_color))
+        //         {
+        //             const new_board_coords = memToBoardCoords(@intCast(row_index + d_pos[0]), @intCast(col_index + d_pos[1]));
+        //             try stdout.print("{c},{d}\n", .{ new_board_coords[0], new_board_coords[1] });
+
+        //             if (board[@intCast((row_index + d_pos[0]) * 8 + col_index + d_pos[1])].set_color != .none)
+        //                 break;
+
+        //             row_index += d_pos[0];
+        //             col_index += d_pos[1];
+        //         }
+        //     }
+        // },
         else => unreachable,
     }
 }
 
+/// Updates a piece's pos and it's corosponding piece handle.
 fn movePiece(
     board: []PieceHandle,
     piece_sets: []PieceSet,
     from_pos: @Vector(2, u8),
     to_pos: @Vector(2, u8),
 ) void {
-    // TODO(caleb): Validate from coords
-    var piece_handle = pieceHandleFromCoords(board, from_pos);
+    var piece_handle = handleFromCoords(board, from_pos);
     var piece = pieceFromHandle(piece_handle.*, piece_sets);
     if (piece == null) {
         const board_coords = memToBoardCoords(from_pos[0], from_pos[1]);
         std.debug.print("No piece at ({c},{d})\n", .{ board_coords[0], board_coords[1] });
         unreachable;
     }
-
-    // TODO(caleb): logistics of moving a piece and all that nonsense
-
-    // Update piece pos
     piece.?.pos = to_pos;
-
-    // Update piece handle(s) at start and end
-    board[to_pos[0] * 8 + to_pos[1]] = piece_handle.*;
-
-    // Clear piece handle
+    board[to_pos[0] * board_dim + to_pos[1]] = piece_handle.*;
     piece_handle.* = PieceHandle{ .piece_index = null, .set_color = .none };
 }
 
 fn drawBoard(stdout: anytype, board: []PieceHandle, piece_sets: []PieceSet) !void {
     try stdout.writeAll("  +");
-    for (0..board_width * 3) |_|
+    for (0..board_dim * 3) |_|
         try stdout.writeByte('-');
     try stdout.writeAll("+\n");
 
-    for (0..board_height) |row_index| {
-        try stdout.print("{d} |", .{board_height - row_index});
-        for (0..board_width) |col_index| {
-            const piece_handle = pieceHandleFromCoords(board, @Vector(2, u8){ @intCast(row_index), @intCast(col_index) });
+    for (0..board_dim) |row_index| {
+        try stdout.print("{d} |", .{board_dim - row_index});
+        for (0..board_dim) |col_index| {
+            const piece_handle = handleFromCoords(board, @Vector(2, u8){ @intCast(row_index), @intCast(col_index) });
             const piece = pieceFromHandle(piece_handle.*, piece_sets);
             try stdout.writeByte(' ');
             if (piece == null) {
@@ -250,30 +260,91 @@ fn drawBoard(stdout: anytype, board: []PieceHandle, piece_sets: []PieceSet) !voi
     }
 
     try stdout.writeAll("  +");
-    for (0..board_width * 3) |_|
+    for (0..board_dim * 3) |_|
         try stdout.writeByte('-');
     try stdout.writeAll("+\n");
 
     try stdout.writeAll("   ");
-    for (0..board_width) |col_index|
+    for (0..board_dim) |col_index|
         try stdout.print(" {c} ", .{'a' + @as(u8, @intCast(col_index))});
     try stdout.writeByte('\n');
 }
 
+const MoveNode = struct { // From pos is recorded by parent node.
+    from_pos: @Vector(2, u8),
+    to_pos: @Vector(2, u8),
+    edges: std.ArrayList(MoveNode),
+};
+
+fn genMoves(
+    ally: std.mem.Allocator,
+    board: []PieceHandle,
+    piece_sets: []PieceSet,
+    current_node: *MoveNode,
+) void {
+    for (piece_sets.pieces) |p|
+        try validMoves(ally, &board, &piece_sets, p.pos, current_node.edges);
+}
+
 pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
+    var backing_buffer = try std.heap.page_allocator.alloc(u8, 1024 * 5);
+    var fb = std.heap.FixedBufferAllocator.init(backing_buffer);
+    var arena = std.heap.ArenaAllocator.init(fb.allocator());
+    const ally = arena.allocator();
 
-    var board: [board_width * board_height]PieceHandle = undefined;
+    var board: [board_dim * board_dim]PieceHandle = undefined;
     var piece_sets: [2]PieceSet = undefined;
     try initPieceSetsSmol(&piece_sets);
     initBoard(&board, &piece_sets);
 
-    // movePiece(&board, &piece_sets, boardToMemCoords('e', 2), boardToMemCoords('e', 3));
-    // movePiece(&board, &piece_sets, boardToMemCoords('g', 2), boardToMemCoords('g', 3));
-    // movePiece(&board, &piece_sets, boardToMemCoords('f', 1), boardToMemCoords('c', 4));
+    const arena_state = arena.state; // Begin tmp mem
 
-    // movePiece(&board, &piece_sets, boardToMemCoords(, ));
+    var move_root = try ally.create(MoveNode);
+    move_root.* = MoveNode{
+        .from_pos = undefined,
+        .to_pos = undefined,
+        .edges = std.ArrayList(MoveNode).init(ally),
+    };
+    var current_node = move_root;
 
-    // try validMoves(stdout, &board, &piece_sets, boardToMemCoords('c', 4));
-    try drawBoard(stdout, &board, &piece_sets);
+    for (0..move_depth) |depth_index| {
+        _ = depth_index;
+        for (piece_sets, 0..) |piece_set, set_index| {
+            _ = set_index;
+            // try stdout.print("{s} possible moves:\n", .{@tagName(@as(SetColor, @enumFromInt(set_index)))});
+            for (piece_set.pieces) |p| {
+                try validMoves(ally, &board, &piece_sets, p.pos, &current_node.edges);
+            }
+
+            for (current_node.edges.items) |move_node| {
+                // TODO(caleb): Also reocrd piece handle, also this logic is stupid...
+                var to_piece: Piece = undefined;
+                const to_piece_ptr = pieceFromHandle(handleFromCoords(&board, move_node.to_pos), &piece_sets);
+                if (to_piece_ptr != null)
+                    to_piece = to_piece_ptr.?.*;
+
+                movePiece(&board, &piece_sets, move_node.from_pos, move_node.to_pos);
+
+                // Gen moves for other piece set
+                genMoves(ally, &board, &piece_sets, move_node);
+
+                movePiece(&board, &piece_sets, move_node.to_pos, move_node.from_pos);
+                if (to_piece_ptr != null) {
+                    to_piece_ptr.?.* = to_piece;
+                    // movePiece(&board, &piece_sets, )
+                }
+
+                // TODO(caleb): Restore board state
+            }
+        }
+    }
+
+    for (move_root.edges.items) |e| {
+        try stdout.print("{?} => {?}\n", .{ e.from_pos, e.to_pos });
+    }
+
+    arena.state = arena_state; // End tmp mem
+
+    // try drawBoard(stdout, &board, &piece_sets);
 }
