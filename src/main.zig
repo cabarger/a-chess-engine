@@ -29,28 +29,28 @@ const Piece = struct {
 
 // GEN PAWN ATTACK MAP
 
-// 1 0
-// 0 0
-
-// 0 0 0
-// 0 1 0
-// 0 0 0
-
 // 8x8 masks
 // const not_a_file = 0xfefefefefefefefe;
 // const not_h_file = 0x7f7f7f7f7f7f7f7f;
 
-// 1 0 1 0
-
 // 2x2
-const not_a_file = 0x11;
+const not_a_file = 0x05;
+const not_b_file = 0x0a;
+
+fn northWestOne(bb: Bitboard) Bitboard {
+    return (bb & not_a_file) << board_dim + 1;
+}
+
+fn southWestOne(bb: Bitboard) Bitboard {
+    return (bb & not_a_file) >> board_dim - 1;
+}
 
 fn southEastOne(bb: Bitboard) Bitboard {
-    return bb >> board_dim;
+    return (bb & not_b_file) >> board_dim + 1;
 }
 
 fn northEastOne(bb: Bitboard) Bitboard {
-    return (bb & not_h_file) << board_dim;
+    return (bb & not_b_file) << board_dim - 1;
 }
 
 fn eastPawnAttacks(c: PieceColor, bb: Bitboard) Bitboard {
@@ -58,6 +58,25 @@ fn eastPawnAttacks(c: PieceColor, bb: Bitboard) Bitboard {
         .white => return northEastOne(bb),
         .black => return southEastOne(bb),
     }
+}
+
+fn westPawnAttacks(c: PieceColor, bb: Bitboard) Bitboard {
+    switch (c) {
+        .white => return northWestOne(bb),
+        .black => return southWestOne(bb),
+    }
+}
+
+fn pawnAnyAttacks(c: PieceColor, bb: Bitboard) Bitboard {
+    return westPawnAttacks(c, bb) | eastPawnAttacks(c, bb);
+}
+
+fn eastCapturablePawns(c: PieceColor, bb: Bitboard) Bitboard {
+    return bb & westPawnAttacks(@enumFromInt((@intFromEnum(c) + 1) % 2), bb);
+}
+
+fn westCapturablePawns(c: PieceColor, bb: Bitboard) Bitboard {
+    return bb & eastPawnAttacks(@enumFromInt((@intFromEnum(c) + 1) % 2), bb);
 }
 
 fn memToBoardCoords(row_index: u8, col_index: u8) @Vector(2, u8) {
@@ -257,16 +276,51 @@ fn boardToMemCoords(col_chr: u8, row: u8) @Vector(2, u8) {
 //     piece_handle.* = PieceHandle{ .piece_index = null, .set_color = .none };
 // }
 
+fn drawBitboard(stdout: anytype, bb: Bitboard) !void {
+    try stdout.writeAll("  +");
+    for (0..board_dim * 3) |_|
+        try stdout.writeByte('-');
+    try stdout.writeAll("+\n");
+
+    var row_index: i8 = board_dim - 1;
+    while (row_index > -1) : (row_index -= 1) {
+        try stdout.print("{d} |", .{board_dim - row_index});
+        var col_index: i8 = board_dim - 1;
+        while (col_index > -1) : (col_index -= 1) {
+            try stdout.writeByte(' ');
+            if (bb & (@as(Bitboard, 1) << @intCast(row_index * board_dim + col_index)) > 0) {
+                try stdout.writeByte('1');
+            } else {
+                try stdout.writeByte('0');
+            }
+            try stdout.writeByte(' ');
+        }
+        try stdout.writeAll("|\n");
+    }
+
+    try stdout.writeAll("  +");
+    for (0..board_dim * 3) |_|
+        try stdout.writeByte('-');
+    try stdout.writeAll("+\n");
+
+    try stdout.writeAll("   ");
+    for (0..board_dim) |col_index|
+        try stdout.print(" {c} ", .{'a' + @as(u8, @intCast(col_index))});
+    try stdout.writeByte('\n');
+}
+
 fn drawBoard(stdout: anytype, bitboards: []Bitboard) !void {
     var printable_board: [board_dim * board_dim]?Piece = undefined;
     for (&printable_board) |*p| p.* = null;
 
     const black_start = @divExact(bitboards.len, 2);
     for (bitboards, 0..) |bb, board_index| {
-        for (0..board_dim) |row_index| {
-            for (0..board_dim) |col_index| {
+        var row_index: i8 = board_dim - 1;
+        while (row_index > -1) : (row_index -= 1) {
+            var col_index: i8 = board_dim - 1;
+            while (col_index > -1) : (col_index -= 1) {
                 if (bb & (@as(Bitboard, 1) << @intCast(row_index * board_dim + col_index)) > 0) {
-                    printable_board[row_index * board_dim + col_index] = Piece{
+                    printable_board[@intCast(row_index * board_dim + col_index)] = Piece{
                         .type = if (board_index < black_start) @enumFromInt(board_index) else @enumFromInt(board_index - black_start),
                         .color = if (board_index < black_start) .white else .black,
                     };
@@ -280,10 +334,12 @@ fn drawBoard(stdout: anytype, bitboards: []Bitboard) !void {
         try stdout.writeByte('-');
     try stdout.writeAll("+\n");
 
-    for (0..board_dim) |row_index| {
-        try stdout.print("{d} |", .{board_dim - row_index});
-        for (0..board_dim) |col_index| {
-            const piece = printable_board[row_index * board_dim + col_index];
+    var row_index: i8 = board_dim - 1;
+    while (row_index > -1) : (row_index -= 1) {
+        try stdout.print("{d} |", .{row_index + 1});
+        var col_index: i8 = board_dim - 1;
+        while (col_index > -1) : (col_index -= 1) {
+            const piece = printable_board[@intCast(row_index * board_dim + col_index)];
             try stdout.writeByte(' ');
             if (piece == null) {
                 try stdout.writeByte('.');
@@ -315,26 +371,16 @@ fn drawBoard(stdout: anytype, bitboards: []Bitboard) !void {
 //     edges: std.ArrayList(MoveNode),
 // };
 
-// fn genMoves(
-//     ally: std.mem.Allocator,
-//     board: []PieceHandle,
-//     piece_sets: []PieceSet,
-//     current_node: *MoveNode,
-// ) void {
-//     for (piece_sets.pieces) |p|
-//         try validMoves(ally, &board, &piece_sets, p.pos, current_node.edges);
-// }
-
 fn initBitboards(bitboards: []Bitboard) void {
     for (bitboards) |*bit_board| bit_board.* = 0;
 
     // White bitboard(s)
-    bitboards[0] |= (1 << (1 * board_dim + 0));
-    bitboards[0] |= (1 << (1 * board_dim + 1));
+    bitboards[0] |= (1 << (0 * board_dim + 0));
+    bitboards[0] |= (1 << (0 * board_dim + 1));
 
     // Black bitboard(s)
-    bitboards[1] |= (1 << (0 * board_dim + 0));
-    bitboards[1] |= (1 << (0 * board_dim + 1));
+    bitboards[1] |= (1 << (1 * board_dim + 0));
+    bitboards[1] |= (1 << (1 * board_dim + 1));
 }
 
 pub fn main() !void {
@@ -348,6 +394,8 @@ pub fn main() !void {
     var bitboards: [2]Bitboard = undefined;
 
     initBitboards(&bitboards);
+
+    try drawBitboard(stdout, bitboards[0]);
     try drawBoard(stdout, &bitboards);
 
     // try initPieceSetsSmol(&piece_sets);
